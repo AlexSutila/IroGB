@@ -3,6 +3,7 @@
 // Emulator core includes
 #include "cart/cart.hpp"
 #include "frontend/libretro/libretro.h"
+#include "frontend/libretro/libretro_opts.h"
 #include "frontend/logger.hpp"
 #include "gbc.hpp"
 #include "memory/mmio/dmg.hpp"
@@ -20,6 +21,7 @@
 /* ======================================================================
  * Start singleton LibretroFrontend implementation
  * ====================================================================== */
+constexpr std::size_t cycles_per_frame = 70224;
 
 LibretroFrontend::LibretroFrontend() {
   audio_buffer.reserve(4096);
@@ -93,28 +95,30 @@ void LibretroFrontend::restore_snapshot(std::span<const byte_t> snapshot) {
   gbc->savestate_deserialize(snapshot);
 }
 
-const std::string LibretroFrontend::get_bios_option() {
+const bool LibretroFrontend::get_flag_option(const retro_core_option_v2_definition &opt) const {
+  auto &callbacks = LibretroFrontend::get_instance().get_callbacks();
   retro_variable var = {
-      .key = "irogb_bios",
+      .key = opt.key,
+      .value = nullptr,
+  };
+
+  if (callbacks.environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    return strcmp(var.value, "enabled") == 0;
+  return strcmp(opt.default_value, "enabled") == 0;
+}
+
+const std::string LibretroFrontend::get_bios_option() const {
+  retro_variable var = {
+      .key = irogb_bios_opt.key,
       .value = nullptr,
   };
 
   auto &callbacks = LibretroFrontend::get_instance().get_callbacks();
   if (callbacks.environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
     return var.value;
-  return "auto";
-}
 
-const bool LibretroFrontend::get_force_mono_option() {
-  retro_variable var = {
-      .key = "irogb_monochrome_dmg",
-      .value = nullptr,
-  };
-
-  auto &callbacks = LibretroFrontend::get_instance().get_callbacks();
-  if (callbacks.environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-    return strcmp(var.value, "enabled") == 0; // hate it but whatever lol
-  return false;
+  // Automatically select a BIOS if it is available, otherwise use fallback
+  return irogb_bios_opt.key;
 }
 
 void LibretroFrontend::cheat_set(std::size_t index, bool enabled, std::string &code) {
@@ -134,6 +138,35 @@ void LibretroFrontend::cheat_reset() {
   gbc->configure_cheats(cheat_codes);
 }
 
+void LibretroFrontend::run() {
+  const bool use_big_step = get_flag_option(irogb_big_step_opt);
+
+  // This is described in the options here, but the idea behind this option is to give a slight
+  // boost in CPU performance without harming the accuracy at all. These should be behaviorally
+  // identical under all circumstances from a players perspective.
+  if (use_big_step)
+    run_big_stepped();
+  else
+    run_cycle_stepped();
+}
+
+void LibretroFrontend::run_cycle_stepped() {
+  auto const &gbc = get();
+  for (std::size_t i{0}; i < cycles_per_frame; ++i)
+    gbc->step();
+}
+
+void LibretroFrontend::run_big_stepped() {
+  std::size_t elapsed_cycles{0};
+  auto const &gbc = get();
+
+  // There is a high probability that this bleeds over a few clock cycles, but the granularity
+  // of this error is absurdly small and will never actually be noticable to players so we ball
+  do {
+    elapsed_cycles += gbc->big_step();
+  } while (elapsed_cycles < cycles_per_frame);
+}
+
 void LibretroFrontend::load_game(cart &c) {
   gbc->insert_cartridge(c); // Save should be ready if it doesnt throw
   initial_state = take_snapshot();
@@ -141,7 +174,7 @@ void LibretroFrontend::load_game(cart &c) {
 }
 
 void LibretroFrontend::try_show_frame() {
-  if (!frame_ready)
+  if (!frame_ready) [[unlikely]]
     return;
 
   // We modify the frame in place to update replace the colors based on
@@ -154,13 +187,11 @@ void LibretroFrontend::try_show_frame() {
     constexpr std::uint32_t alpha_mask = 0xFF000000;
     const bool is_cgb = gbc->get_sys().cgb_mode;
 
-    if (!is_cgb && get_force_mono_option()) {
+    if (!is_cgb && get_flag_option(irogb_monochrome_dmg_opt)) {
       const auto mono_pal_idx = static_cast<byte_t>((px >> 24) & 0xFF);
-      px = get_mono_color(mono_pal_idx); // Substitution
+      px = get_mono_color(mono_pal_idx); // Pixel substitution
     }
-
-    // Always bring the alpha bits back
-    return px | alpha_mask;
+    return px | alpha_mask; // Always bring the alpha bits back
   });
 
   cb.video_cb(frame.data(), fb_width, fb_height, fb_width * sizeof(std::uint32_t));

@@ -37,6 +37,7 @@ public:
     static LibretroFrontend instance;
     return instance;
   };
+
   void make_gbc(std::optional<BootROM> bios);
 
   struct LibretroCallbacks {
@@ -66,12 +67,13 @@ public:
   void restore_snapshot(std::span<const byte_t> snapshot);
   std::size_t get_state_size() const { return state_size; }
 
-  const std::string get_bios_option();
-  const bool get_force_mono_option();
+  const bool get_flag_option(const retro_core_option_v2_definition &opt) const;
+  const std::string get_bios_option() const;
 
   void cheat_set(std::size_t index, bool enabled, std::string &code);
   void cheat_reset();
 
+  void run();
   void load_game(cart &c);
   void try_show_frame();
   void try_poll_input();
@@ -89,6 +91,10 @@ private:
 
   // Rendering options
   bool force_mono_dmg{false};
+
+  // Emulation driver helpers
+  void run_cycle_stepped();
+  void run_big_stepped();
 
   // Input polling and helpers
   bool test_input(unsigned id) const;
