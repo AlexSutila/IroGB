@@ -61,9 +61,6 @@ enum : std::uint16_t {
   F_OBP0,
   F_OBP1,
   F_OPRI,
-
-  // Event scheduling
-  F_SCHED,
 };
 
 enum : std::uint16_t {

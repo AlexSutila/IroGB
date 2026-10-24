@@ -6,8 +6,8 @@ were written by hand, so it should be quite robust - dorce
 
 from typing import Any, Iterator
 
+import argparse
 import json
-import sys
 
 from irogb_python import (
     Cartridge,
@@ -95,13 +95,14 @@ def diff_states(lhs: Any, rhs: Any, path: str = "root") -> bool:
     return True
 
 
-def make_initial_state(cart: Cartridge) -> bytes:
+def make_initial_state(cart: Cartridge, skip_cycles: int) -> bytes:
     """
     In order to make sure we are comparing apples against apples, we make a
     temporary emulator instance which we use just to get an initial savestate
     which we can use to prime the other two emulator instances.
     """
     gbc = GameBoyColor(cartridge=cart)  # Will fall out of scope. Totally fine
+    gbc.big_step(skip_cycles)
     return gbc.savestate_serialize()
 
 
@@ -112,9 +113,7 @@ def cycle_stepped_generator(
     gbc = GameBoyColor(cartridge=cart)
     gbc.savestate_deserialize(initial_state)
 
-    increment = (
-        2  # We use 2 because of how we interlace the fast cycle for double speed
-    )
+    increment = 2  # Double-speed interlacing
     elapsed_cycles = 0
 
     while True:
@@ -145,9 +144,9 @@ def big_step_stepped_generator(
         elapsed_cycles += gbc.big_step()
 
 
-def main() -> int:
-    cart = load_cart_filesystem(sys.argv[1])
-    initial_state = make_initial_state(cart)
+def main(rom: str, skip_cycles: int) -> int:
+    cart = load_cart_filesystem(rom)
+    initial_state = make_initial_state(cart, skip_cycles)
 
     big_step_gen = big_step_stepped_generator(initial_state, cart)
     cycle_gen = cycle_stepped_generator(initial_state, cart)
@@ -155,6 +154,10 @@ def main() -> int:
     next(big_step_gen)
     next(cycle_gen)
 
+    """
+    Main iteration and comparison loop, very slow due to the language boundary and
+    intermediate emulator state evaluation steps after each iteration.
+    """
     for frame_idx, (
         (cycle_elapsed, cycle_state),
         (big_elapsed, big_state),
@@ -187,4 +190,24 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--rom",
+        required=True,
+        metavar="PATH",
+        help="Path to the ROM of the target cartridge",
+    )
+    parser.add_argument(
+        "--skip",
+        type=int,
+        default=0,
+        metavar="CYCLES",
+        help="Skip comparisons for the firts CYCLES cycles",
+    )
+
+    args = parser.parse_args()
+    if args.skip < 0:
+        parser.error("--skip must be non-negative")
+
+    raise SystemExit(main(args.rom, args.skip))

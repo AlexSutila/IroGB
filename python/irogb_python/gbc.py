@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
 from .debugger import Debugger, BreakContext
 from .ppu import PPUState, RenderedFrame
@@ -98,7 +98,7 @@ class GameBoyColor:
         addr_bus = self._gbc.get_bus()
         return addr_bus.read_byte(addr, debug=debug)
 
-    def write_byte(self, addr: int, value: int, debug=False):
+    def write_byte(self, addr: int, value: int):
         self._check_bitwidth_addr(addr)
         self._check_bitwidth_byte(value)
         addr_bus = self._gbc.get_bus()
@@ -118,14 +118,14 @@ class GameBoyColor:
         else:
             self.step(cycles=cycles)
 
-    def big_step(self, cycles: int = None) -> int:
+    def big_step(self, cycles: Optional[int] = None) -> int:
         if cycles is not None:
             return self._gbc.big_step_cycles(cycles)
         else:
             return self._gbc.big_step()
 
-    def step(self, cycles: int = None):
+    def step(self, cycles: Optional[int] = None):
         if cycles is not None:
             self._gbc.step_cycles(cycles)
-        else:  # Latent, not recommended
+        else:
             self._gbc.step()

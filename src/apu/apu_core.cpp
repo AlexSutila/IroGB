@@ -82,9 +82,6 @@ enum : std::uint16_t {
   F_DC_Y1_L,
   F_DC_X1_R,
   F_DC_Y1_R,
-
-  // Event scheduling
-  F_SCHED,
 };
 
 template <typename T> void APU::parse_savestate(T &t) {
