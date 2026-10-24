@@ -31,7 +31,7 @@ The web version is built on [raylib](https://github.com/raysan5/raylib) and aims
 The web version does not require compilation or installation, try it out [here](https://alexsutila.github.io/IroGB/)!
 
 ### RetroArch Compatability
-We also expose our emulator core as a functional [libretro](https://www.libretro.com/#google_vignette) port, giving it compatability with [retroarch](https://www.retroarch.com/). As a result, with cross compilation our core runs on basically every platform that supports retroarch.
+We also expose our emulator core as a functional [libretro](https://www.libretro.com/#google_vignette) port, giving it compatability with frontends that support libretro, like [retroarch](https://www.retroarch.com/) and [bizhawk](https://github.com/TASEmulators/BizHawk). As a result, with cross compilation our core runs on basically every platform that supports retroarch.
 
 ### Memory Bank Circuitry Support
 IroGB supports most official and unofficial memory bank controllers (MBCs) that were used in Game Boy cartridges. This includes the following:
