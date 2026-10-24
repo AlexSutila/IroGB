@@ -14,15 +14,7 @@ class Frontend;
 class APU {
 public:
   APU(AddressBus &bus, Frontend &frontend, SystemScheduler &g_sched);
-  ScheduledEventOutcome handle_event(time_type event_time, unsigned event);
   void step();
-
-  enum class SchedulerEvent : unsigned {
-    EVENT_STEP_CYCLE = 0,
-
-    /* For scheduler serialization */
-    EVENT_COUNT,
-  };
 
   // Enable the CGB-02 extra-length-clocking quirk (default: off)
   // When disabled, extra length clocking only happens on a 0->1 transition of
@@ -198,8 +190,6 @@ private:
   // Highpass filter
   float dc_x1_l{}, dc_y1_l{};
   float dc_x1_r{}, dc_y1_r{};
-
-  ChildScheduler sched;
 };
 
 #endif // GBC_APU_HPP

@@ -122,6 +122,7 @@ private:
   ScheduledEventOutcome handle_event(SchedulerComponent c_id, unsigned e_id, time_type t);
   time_type sched_pop_until(ScheduledEventOutcome outcome); // Be careful with this!!!!!
   void sched_pop_until(time_type target_cycles);
+  void step_peripherals(bool fast_cycle);
   CheatStats cheat_stats_{};
 
   void savestate_serialize_raise(bool check_ready) const;

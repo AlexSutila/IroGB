@@ -507,12 +507,6 @@ ScheduledEventOutcome GameBoyColor::handle_event(SchedulerComponent c_id, unsign
   case SchedulerComponent::SCHED_COMPONENT_VRAM_DMA:
     return vram_dma->handle_event(t, e_id);
 
-  case SchedulerComponent::SCHED_COMPONENT_PPU:
-    return ppu->handle_event(t, e_id);
-
-  case SchedulerComponent::SCHED_COMPONENT_APU:
-    return apu->handle_event(t, e_id);
-
   default:
     throw std::runtime_error("Event with undefined component ID");
   }
@@ -557,6 +551,15 @@ void GameBoyColor::sched_pop_until(time_type target_cycle) {
   }
 }
 
+void GameBoyColor::step_peripherals(bool fast_cycle) {
+  timer->step();
+
+  if (!fast_cycle) {
+    ppu->step();
+    apu->step();
+  }
+}
+
 std::size_t GameBoyColor::big_step() {
   // CPU is inactive while VDMA runs, so pop events until it completes
   if (sys_.vdma_active) [[unlikely]]
@@ -564,8 +567,10 @@ std::size_t GameBoyColor::big_step() {
 
   // Otherwise, CPU is probably active
   const auto elapsed_cpu_clocks = cpu->big_step([this](std::size_t sync_cycles) {
-    for (std::size_t sync_cycle{0}; sync_cycle < sync_cycles; ++sync_cycle)
-      timer->step();
+    for (std::size_t sync_cycle{0}; sync_cycle < sync_cycles; ++sync_cycle) {
+      const bool fast_cycle = (sys_.double_speed) && (sync_cycle % 2 != 0);
+      step_peripherals(fast_cycle);
+    }
 
     sys_.elapsed_clocks += clks_key1_controlled(sys_.double_speed, sync_cycles);
     sched_pop_until(sys_.elapsed_clocks);
@@ -579,13 +584,13 @@ void GameBoyColor::step() {
   // DMG cycle, or the first cycle of double speed in CGB mode (if double speed is enabled)
   if (!sys_.vdma_active)
     cpu->step();
-  timer->step();
+  step_peripherals(false);
 
   // If we are in double speed mode, step affected components again
   if (sys_.double_speed) {
     if (!sys_.vdma_active)
       cpu->step();
-    timer->step();
+    step_peripherals(true);
   }
 
   sys_.elapsed_clocks += clks_static_timing(1);
