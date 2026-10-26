@@ -512,7 +512,7 @@ ScheduledEventOutcome GameBoyColor::handle_event(SchedulerComponent c_id, unsign
   }
 }
 
-time_type GameBoyColor::sched_pop_until(ScheduledEventOutcome outcome) {
+time_type GameBoyColor::sched_advance_until(ScheduledEventOutcome outcome) {
   ScheduledEventOutcome next_outcome{};
   time_type cycle{};
 
@@ -525,6 +525,15 @@ time_type GameBoyColor::sched_pop_until(ScheduledEventOutcome outcome) {
     if (!c) [[unlikely]]
       throw std::runtime_error("Waiting on event outcome with empty queue");
     cycle = *c;
+
+    // The CPU is inactive while waiting, but peripherals must continue advancing until the
+    // next event's logical timestamp.
+    while (sys_.elapsed_clocks < cycle) {
+      step_peripherals(false);
+      if (sys_.double_speed)
+        step_peripherals(true);
+      sys_.elapsed_clocks += clks_key1_controlled(sys_.double_speed, 1);
+    }
 
     auto [c_id, e_id] = sched_.pop_next_event();
     next_outcome = handle_event(c_id, e_id, cycle);
@@ -563,7 +572,7 @@ void GameBoyColor::step_peripherals(bool fast_cycle) {
 std::size_t GameBoyColor::big_step() {
   // CPU is inactive while VDMA runs, so pop events until it completes
   if (sys_.vdma_active) [[unlikely]]
-    return sched_pop_until(ScheduledEventOutcome::EVENT_OUTCOME_VDMA_COMPLETE);
+    return sched_advance_until(ScheduledEventOutcome::EVENT_OUTCOME_VDMA_COMPLETE);
 
   // Otherwise, CPU is probably active
   const auto elapsed_cpu_clocks = cpu->big_step([this](std::size_t sync_cycles) {

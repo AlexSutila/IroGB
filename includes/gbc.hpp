@@ -120,7 +120,7 @@ private:
   void cram_init_mono() const;
 
   ScheduledEventOutcome handle_event(SchedulerComponent c_id, unsigned e_id, time_type t);
-  time_type sched_pop_until(ScheduledEventOutcome outcome); // Be careful with this!!!!!
+  time_type sched_advance_until(ScheduledEventOutcome outcome); // Be careful with this!!!!!
   void sched_pop_until(time_type target_cycles);
   void step_peripherals(bool fast_cycle);
   CheatStats cheat_stats_{};
