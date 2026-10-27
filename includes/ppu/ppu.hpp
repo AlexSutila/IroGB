@@ -11,6 +11,7 @@
 #include "ppu/fifo.hpp"
 #include "ppu/palette.hpp"
 #include "ppu/sprites.hpp"
+#include "schedule.hpp"
 
 #include <array>
 #include <cstddef>
@@ -25,7 +26,7 @@ class VDMA;
 class PixelProcessingUnit : Debug::Debuggable {
 public:
   PixelProcessingUnit(AddressBus *bus, Frontend &fe, std::optional<Debug::Debugger> &debugger,
-                      runtime_sys_info &sys);
+                      runtime_sys_info &sys, SystemScheduler &g_sched);
   template <typename T> void parse_savestate(T &t);
   void reset();
   void step();
@@ -92,10 +93,16 @@ private:
   static constexpr auto max_oam_sprite_count = 10;
   std::size_t sprites_searched{};
   std::vector<Sprite> oam_data{};
+
   /* For the first frame upon the PPU being enabled, the first scanline has
    * strange timings and OAM is 2 cycles short. TODO: This first frame is not
    * actually pushed to the LCD to prevent visual artifacts. */
   bool ppu_enable_oam_bug{};
+
+  /* The real hardware does go through the full pipeline for the first frame,
+   * however it does not actually push the pixels to the LCD. The first frame
+   * should be rendered completely blank. */
+  bool first_frame_rendered{};
 
   /* Coloring and palette configuration */
   [[nodiscard]] std::uint32_t get_bgwin_rgb(const pixel &px) const;

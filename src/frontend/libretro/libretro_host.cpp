@@ -4,7 +4,6 @@
 #include <optional>
 #include <stdarg.h>
 #include <stdexcept>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,15 +11,6 @@
 #include "emu_types.hpp"
 #include "gbc.hpp"
 #include "memory/boot.hpp"
-
-/**
- * IroGB's GameBoyColor class exposes two emulation driver methods, one that steps cycle
- * by cycle and provides better debugging capabilities, and one that is designed to skip
- * idle CPU cycles and reduce the number of synchronization points while making the same
- * accuracy guarantees. We will not expose the debugging capability through LibRetro, so
- * this can be used to toggle between the 'fast' and 'slow' ways of driving the emulator
- */
-#define USE_BIGSTEP 0
 
 // TODO: In case libretro logging breaks, we might want this to fall back to std::cerr?
 static void fallback_log(enum retro_log_level level, const char *fmt, ...) {}
@@ -46,6 +36,8 @@ extern "C" {
  * Start implementation of C-header (exposed directly to libretro)
  * ====================================================================== */
 #include "frontend/libretro/libretro.h"
+#include "frontend/libretro/libretro_opts.h"
+#include "frontend/libretro/libretro_ports.h"
 
 static std::string get_system_dir() {
   auto &callbacks = LibretroFrontend::get_instance().get_callbacks();
@@ -151,53 +143,10 @@ void retro_set_environment(retro_environment_t cb) {
   auto &callbacks = LibretroFrontend::get_instance().get_callbacks();
   callbacks.environ_cb = cb;
 
-  static struct retro_core_option_v2_definition option_defs[] = {
-      {.key = "irogb_bios",
-       .desc = "Select which BIOS to use (if available).",
-       .desc_categorized = NULL,
-       .info_categorized = NULL,
-       .category_key = NULL,
-       .values =
-           {
-               {"auto", "Auto"},
-               {"dmg", "DMG BIOS"},
-               {"cgb", "CGB BIOS"},
-               {"none", "Skip BIOS"},
-               {NULL, NULL},
-           }, // ...
-       .default_value = "auto"},
-      {.key = "irogb_monochrome_dmg",
-       .desc = "Disable re-coloring of DMG games (only applicable with CGB BIOS)",
-       .desc_categorized = NULL,
-       .info_categorized = NULL,
-       .category_key = NULL,
-       .values =
-           {
-               {"enabled", "enabled"},
-               {"disabled", "disabled"},
-               {NULL, NULL},
-           }, // ...
-       .default_value = "disabled"},
-      {0}
-  };
-  static struct retro_core_options_v2 options = {
-      NULL,
-      option_defs,
-  };
-
-  static const retro_controller_description port1[] = {
-      {"Game Boy Joypad", RETRO_DEVICE_JOYPAD},
-      {          nullptr,                   0}
-  };
-  static const retro_controller_info ports[] = {
-      {  port1, 1},
-      {nullptr, 0}
-  };
-  callbacks.environ_cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void *)ports);
-
   enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
+  callbacks.environ_cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void *)irogb_ports);
   callbacks.environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
-  callbacks.environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, (void *)&options);
+  callbacks.environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, (void *)&irogb_opts);
 
   retro_log_callback log_callback{}; // Configure logging and frontend debugging utilities
   if (callbacks.environ_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log_callback))
@@ -272,18 +221,8 @@ void retro_reset(void) {
 }
 
 void retro_run(void) {
-  constexpr std::size_t cycles_per_frame = 70224;
   auto &instance = LibretroFrontend::get_instance();
-
-#if (USE_BIGSTEP)
-  std::size_t elapsed_cycles{0};
-  do {
-    elapsed_cycles += instance.get()->big_step();
-  } while (elapsed_cycles < cycles_per_frame);
-#else
-  for (std::size_t i{0}; i < cycles_per_frame; i++)
-    instance.get()->step();
-#endif // USE_BIGSTEP
+  instance.run(); // Will do one of `step()` or `big_step()` for a full frames duration
 
   instance.try_show_frame();
   instance.try_poll_input();

@@ -1,6 +1,7 @@
 #include "memory/mmio/dmg.hpp"
 #include "cpu/interrupts.hpp"
 #include "emu_types.hpp"
+#include "ppu/ppu.hpp"
 #include "savestate/codec.hpp"
 #include "timer.hpp"
 #include <cassert>

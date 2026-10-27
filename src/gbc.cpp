@@ -351,7 +351,7 @@ GameBoyColor::GameBoyColor(Frontend &frontend)
 
 void GameBoyColor::system_init() {
   /* General system operation info */
-  sys_.elapsed_clocks = 0;
+  sys_.elapsed_clocks = sys_.sys_counter = 0;
   sys_.vdma_active = false;
   sys_.halted = false;
   sys_.double_speed = false;
@@ -362,9 +362,9 @@ void GameBoyColor::system_init() {
   /* Component initialization */
   bus = std::make_unique<AddressBus>(sys_, sched_, debugger_, bios_);
   cpu = std::make_unique<LR35902>(bus.get(), debugger_, sys_);
-  apu = std::make_unique<APU>(*bus, fe_);
-  ppu = std::make_unique<PixelProcessingUnit>(bus.get(), fe_, debugger_, sys_);
-  timer = std::make_unique<TimerUnit>(bus.get());
+  apu = std::make_unique<APU>(*bus, fe_, sched_);
+  ppu = std::make_unique<PixelProcessingUnit>(bus.get(), fe_, debugger_, sys_, sched_);
+  timer = std::make_unique<TimerUnit>(bus.get(), sys_);
   serial = std::make_unique<SerialUnit>(bus.get());
 
   oam_dma = std::make_unique<ObjAttrDMA>(*bus, sys_, sched_);
@@ -498,21 +498,12 @@ void GameBoyColor::init_test_bed() const {
   bus->init_test_bed();
 }
 
-// TODO: This needs to go once these components use the scheduler
-void GameBoyColor::step_peripherals(bool fast_cycle) {
-  timer->step();
-
-  if (!fast_cycle) {
-    ppu->step();
-    apu->step();
-  }
-}
-
 ScheduledEventOutcome GameBoyColor::handle_event(SchedulerComponent c_id, unsigned e_id,
                                                  time_type t) {
   switch (c_id) {
   case SchedulerComponent::SCHED_COMPONENT_OAM_DMA:
     return oam_dma->handle_event(t, e_id);
+
   case SchedulerComponent::SCHED_COMPONENT_VRAM_DMA:
     return vram_dma->handle_event(t, e_id);
 
@@ -521,7 +512,7 @@ ScheduledEventOutcome GameBoyColor::handle_event(SchedulerComponent c_id, unsign
   }
 }
 
-time_type GameBoyColor::sched_pop_until(ScheduledEventOutcome outcome) {
+time_type GameBoyColor::sched_advance_until(ScheduledEventOutcome outcome) {
   ScheduledEventOutcome next_outcome{};
   time_type cycle{};
 
@@ -534,6 +525,15 @@ time_type GameBoyColor::sched_pop_until(ScheduledEventOutcome outcome) {
     if (!c) [[unlikely]]
       throw std::runtime_error("Waiting on event outcome with empty queue");
     cycle = *c;
+
+    // The CPU is inactive while waiting, but peripherals must continue advancing until the
+    // next event's logical timestamp.
+    while (sys_.elapsed_clocks < cycle) {
+      step_peripherals(false);
+      if (sys_.double_speed)
+        step_peripherals(true);
+      sys_.elapsed_clocks += clks_key1_controlled(sys_.double_speed, 1);
+    }
 
     auto [c_id, e_id] = sched_.pop_next_event();
     next_outcome = handle_event(c_id, e_id, cycle);
@@ -560,24 +560,31 @@ void GameBoyColor::sched_pop_until(time_type target_cycle) {
   }
 }
 
-std::size_t GameBoyColor::big_step() {
-  const auto psync_cb = [this](std::size_t sync_cycles) {
-    const auto elapsed_clocks = clks_key1_controlled(sys_.double_speed, sync_cycles);
+void GameBoyColor::step_peripherals(bool fast_cycle) {
+  timer->step();
 
-    // TODO: Eventually, this needs to just straight up go
+  if (!fast_cycle) {
+    ppu->step();
+    apu->step();
+  }
+}
+
+std::size_t GameBoyColor::big_step() {
+  // CPU is inactive while VDMA runs, so pop events until it completes
+  if (sys_.vdma_active) [[unlikely]]
+    return sched_advance_until(ScheduledEventOutcome::EVENT_OUTCOME_VDMA_COMPLETE);
+
+  // Otherwise, CPU is probably active
+  const auto elapsed_cpu_clocks = cpu->big_step([this](std::size_t sync_cycles) {
     for (std::size_t sync_cycle{0}; sync_cycle < sync_cycles; ++sync_cycle) {
       const bool fast_cycle = (sys_.double_speed) && (sync_cycle % 2 != 0);
       step_peripherals(fast_cycle);
     }
 
-    // TODO: This will be the new synchronization mechanism
-    sys_.elapsed_clocks += elapsed_clocks;
+    sys_.elapsed_clocks += clks_key1_controlled(sys_.double_speed, sync_cycles);
     sched_pop_until(sys_.elapsed_clocks);
-  };
-
-  if (sys_.vdma_active) [[unlikely]]
-    return sched_pop_until(ScheduledEventOutcome::EVENT_OUTCOME_VDMA_COMPLETE);
-  return cpu->big_step(psync_cb);
+  });
+  return clks_key1_controlled(sys_.double_speed, elapsed_cpu_clocks);
 }
 
 void GameBoyColor::step() {
@@ -595,8 +602,7 @@ void GameBoyColor::step() {
     step_peripherals(true);
   }
 
-  // TODO: This will go away once we've fully transitioned to a scheduler
-  sys_.elapsed_clocks += clks_key1_controlled(sys_.double_speed, 1);
+  sys_.elapsed_clocks += clks_static_timing(1);
   sched_pop_until(sys_.elapsed_clocks);
 }
 
@@ -637,26 +643,37 @@ bool GameBoyColor::savestate_ready() const {
 }
 
 enum : std::uint16_t {
-  F_ELAPSED_CLOCKS = 1,
-  F_FLAGS,
+  F_SYS = 1,
+
+  F_CPU,
+  F_BUS,
+  F_TIMER,
+  F_SERIAL,
+  F_PPU,
+  F_APU,
+
+  F_SCHED,
 };
 
 template <typename T> void GameBoyColor::parse_savestate(T &t) {
-  constexpr auto version = 5; // Schema revision
+  constexpr auto version = 6; // Schema revision
   t.chunk_header(version, Savestate::C_GBC);
 
-  t.field_generic(F_ELAPSED_CLOCKS, sys_.elapsed_clocks);
-  t.field_generic(F_FLAGS, sys_.flags);
+  t.field_complex(F_SYS, [&](auto &t) {
+    t.field_generic(0, sys_.elapsed_clocks);
+    t.field_generic(1, sys_.sys_counter);
+    t.field_generic(2, sys_.flags);
+  });
 
   // Begin recursive descent into each component
-  cpu->parse_savestate(t);
-  bus->parse_savestate(t);
-  timer->parse_savestate(t);
-  serial->parse_savestate(t);
-  ppu->parse_savestate(t);
-  apu->parse_savestate(t);
+  t.field_complex(F_CPU, [&](auto &t) { cpu->parse_savestate(t); });
+  t.field_complex(F_BUS, [&](auto &t) { bus->parse_savestate(t); });
+  t.field_complex(F_TIMER, [&](auto &t) { timer->parse_savestate(t); });
+  t.field_complex(F_SERIAL, [&](auto &t) { serial->parse_savestate(t); });
+  t.field_complex(F_PPU, [&](auto &t) { ppu->parse_savestate(t); });
+  t.field_complex(F_APU, [&](auto &t) { apu->parse_savestate(t); });
 
-  sched_.parse_savestate(t);
+  t.field_complex(F_SCHED, [&](auto &t) { sched_.parse_savestate(t); });
   t.eof();
 }
 
@@ -665,23 +682,35 @@ template void GameBoyColor::parse_savestate<Savestate::Reader>(Savestate::Reader
 template void GameBoyColor::parse_savestate<Savestate::Sizer>(Savestate::Sizer &);
 template void GameBoyColor::parse_savestate<Savestate::Checker>(Savestate::Checker &);
 
-std::vector<byte_t> GameBoyColor::savestate_serialize() {
+void GameBoyColor::savestate_serialize_raise(bool check_ready) const {
   if (!bus || !cpu || !ppu || !timer || !serial || !apu)
-    throw std::runtime_error("GameBoyColor::serialize_savestate() uninitialized");
+    throw std::runtime_error("GameBoyColor::serialize_savestate_raise() uninitialized");
 
   // Align saves to instruction fetches
-  if (!savestate_ready())
-    throw std::runtime_error("GameBoyColor::serialize_savestate() unsafe point");
+  if (check_ready && !savestate_ready())
+    throw std::runtime_error("GameBoyColor::serialize_savestate_raise() unsafe point");
+}
+
+std::vector<byte_t> GameBoyColor::savestate_serialize() {
+  savestate_serialize_raise(true);
 
   // Writer performs deserialization
-  Savestate::Writer out{};
+  Savestate::Writer out = Savestate::Writer(true);
   parse_savestate(out);
   return out.get();
 }
 
+Savestate::TreeRoot GameBoyColor::savestate_as_tree() {
+  savestate_serialize_raise(true);
+  constexpr bool opt_in = true;
+
+  Savestate::Writer out = Savestate::Writer(opt_in);
+  parse_savestate(out);
+  return out.get_tree();
+}
+
 void GameBoyColor::savestate_deserialize(const std::span<const byte_t> data) {
-  if (!bus || !cpu || !ppu || !timer || !serial || !apu)
-    throw std::runtime_error("GameBoyColor::serialize_savestate() uninitialized");
+  savestate_serialize_raise(false);
 
   // First pass does a check on the buffer content to make sure the save is in
   // a valid format BEFORE blindly altering system components.
@@ -694,8 +723,7 @@ void GameBoyColor::savestate_deserialize(const std::span<const byte_t> data) {
 }
 
 std::size_t GameBoyColor::savestate_size() {
-  if (!bus || !cpu || !ppu || !timer || !serial || !apu)
-    throw std::runtime_error("GameBoyColor::serialize_savestate() uninitialized");
+  savestate_serialize_raise(false);
 
   // Sizer computes size to estimate space needed for memory allocation. The
   // estimation is generous and should always be large enough to fit a save.

@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <tuple>
+#include <vector>
 
 namespace Debug {
 class Debuggable;
@@ -35,6 +36,7 @@ enum class ScheduledEventOutcome {
 enum class SchedulerComponent : unsigned {
   SCHED_COMPONENT_OAM_DMA = 0,
   SCHED_COMPONENT_VRAM_DMA,
+  SCHED_COMPONENT_APU,
 
   /* For serialization purposes - don't touch */
   SCHED_COMPONENT_COUNT,
@@ -64,14 +66,13 @@ public:
   SystemScheduler(std::optional<Debug::Debugger> &debugger_, runtime_sys_info &sys_);
   ~SystemScheduler();
 
-  // Serialization gets hairy, see implementation file for details
+  // Main system scheduler needs to recover the global event queue
   template <typename T> void parse_savestate(T &t);
   std::optional<time_type> peek_next_cycle() const;
   event pop_next_event();
 
-  event_time schedule_event_in(time_type in_cycles, event e);
-  event_time schedule_event_on(time_type cycle, event e);
-  bool unschedule_event(event_time t);
+  time_type schedule_event_in(time_type in_cycles, event e);
+  time_type schedule_event_on(time_type cycle, event e);
 
 private:
   struct Implementation;
@@ -83,9 +84,15 @@ private:
 
 class ChildScheduler {
 public:
+  using LookupVal = std::optional<time_type>;
   ChildScheduler(SystemScheduler &global_sched, SchedulerComponent component_id,
                  const std::size_t num_events);
   ~ChildScheduler();
+
+  // Child scheduler needs to recover its event lookup vector used for unscheduling. We
+  // do not assign these chunk headers, as the structure is rather simple, and should be
+  // called by the owning component and serialized as a complex field.
+  template <typename T> void parse_savestate(T &t, std::size_t num_events);
 
   template <typename EventIdType>
   void schedule_event_in(time_type in_cycles, EventIdType event_id) {
@@ -100,10 +107,24 @@ public:
     return unschedule_event_impl(static_cast<unsigned>(event_id));
   }
 
-private:
-  struct Implementation;
-  std::unique_ptr<Implementation> impl;
+  // Our way of unscheduling events does not actually involve removing entries from the
+  // data structures used to implement the scheduler. Instead, we consider stale events
+  // dirty and conditionally handle them based on this.
+  bool is_event_dirty(time_type scheduled_cycle, unsigned event_id) const;
 
+private:
+  std::vector<LookupVal> e_index;
+
+  // Helpers for working with the event tracker. The `e_index` member is a mechanism
+  // to know what events have and have not been scheduled for the sake of an efficient
+  // event de-scheduling solution.
+  void index_put(const unsigned event_id, const time_type t);
+  LookupVal index_del(const unsigned event_id);
+  void index_load_vec(std::vector<LookupVal> &vec);
+  std::vector<LookupVal> index_as_vec() const;
+
+  // Implementations behind previously defined templates which abstract away the
+  // original enum type into a generic `unsigned` value.
   void schedule_event_in_impl(time_type in_cycles, unsigned event_id);
   void schedule_event_on_impl(time_type cycle, unsigned event_id);
   bool unschedule_event_impl(unsigned event_id);

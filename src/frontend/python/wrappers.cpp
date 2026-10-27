@@ -7,6 +7,7 @@
 #include "memory/mmio/dmg.hpp"
 #include "memory/mmio/mmio.hpp"
 #include <optional>
+#include <span>
 
 PyGameBoyColor::PyGameBoyColor(const pybind11::function &callback) {
   const auto &gbc = fe_.get();
@@ -29,6 +30,39 @@ void PyGameBoyColor::insert_cartridge(cart c) {
 using frame_buf_t = std::array<std::uint32_t, 160 * 144>;
 frame_buf_t PyGameBoyColor::get_frame() { return fe_.get_frame(); }
 
+[[nodiscard]] std::vector<byte_t> PyGameBoyColor::savestate_serialize() {
+  const auto &gbc = fe_.get();
+  if (!savestate_ready())
+    return {}; // To avoid throwing an error within the core
+  return gbc->savestate_serialize();
+}
+
+[[nodiscard]] Savestate::TreeRoot PyGameBoyColor::savestate_as_tree() {
+  const auto &gbc = fe_.get();
+  if (!savestate_ready())
+    return {}; // Yeah... bruh moment
+  return gbc->savestate_as_tree();
+}
+
+bool PyGameBoyColor::savestate_deserialize(std::span<const byte_t> data) {
+  const auto &gbc = fe_.get();
+  try {
+    gbc->savestate_deserialize(data);
+    return true;
+  }
+
+  // Savestate may fail if the savestate was created on a different architecture
+  // or an older emulator version. TODO: Pass some informative error message?
+  catch (...) {
+    return false;
+  }
+}
+
+[[nodiscard]] bool PyGameBoyColor::savestate_ready() {
+  const auto &gbc = fe_.get();
+  return gbc->savestate_ready();
+}
+
 void PyGameBoyColor::breakpoint_add(const addr_t addr, Debug::BreakReason reason) {
   auto &debugger = fe_.get()->get_debugger();
   debugger->breakpoint_add(addr, reason);
@@ -43,10 +77,13 @@ std::size_t PyGameBoyColor::big_step_cycles(std::size_t cycles) {
   auto &gbc = fe_.get();
   std::size_t elapsed_cycles{0};
 
+  // Keep in mind that one `cycle` technically emulates one cycle and the fast
+  // cycle of double speed mode if it is active. We do this so the duration of
+  // one call to step is consistent. As a result, we have to use `2 * cycle`
   do {
     std::size_t sync_cycles = gbc->big_step();
     elapsed_cycles = elapsed_cycles + sync_cycles;
-  } while (elapsed_cycles < cycles);
+  } while (elapsed_cycles < cycles * 2);
 
   // We return the number of cycles elapsed here because it is not garunteed to
   // always align perfectly with the number of cycles passed in.
@@ -61,7 +98,7 @@ std::size_t PyGameBoyColor::big_step() {
 void PyGameBoyColor::step_cycles(std::size_t cycles) {
   auto &gbc = fe_.get();
   for (std::size_t i{0}; i < cycles; i++)
-    gbc->step();
+    gbc->step(); // Includes fast cycle for double speed mode
 }
 
 void PyGameBoyColor::step() {

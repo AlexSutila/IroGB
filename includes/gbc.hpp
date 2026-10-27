@@ -10,6 +10,7 @@
 #include "memory/dma.hpp"
 #include "memory/mmio/mmio.hpp"
 #include "ppu/ppu.hpp"
+#include "savestate/codec.hpp"
 #include "schedule.hpp"
 #include "serial.hpp"
 #include "timer.hpp"
@@ -27,6 +28,7 @@ class Frontend;
  * compatability and current operating mode. */
 struct runtime_sys_info {
   std::uint64_t elapsed_clocks{};
+  std::uint16_t sys_counter{};
 
   union {
     struct {
@@ -80,6 +82,7 @@ public:
 
   template <typename T> void parse_savestate(T &t); // Top level
   [[nodiscard]] std::vector<byte_t> savestate_serialize();
+  [[nodiscard]] Savestate::TreeRoot savestate_as_tree();
   void savestate_deserialize(std::span<const byte_t> data);
   [[nodiscard]] std::size_t savestate_size();
   [[nodiscard]] bool savestate_ready() const;
@@ -117,12 +120,12 @@ private:
   void cram_init_mono() const;
 
   ScheduledEventOutcome handle_event(SchedulerComponent c_id, unsigned e_id, time_type t);
-  time_type sched_pop_until(ScheduledEventOutcome outcome); // Be careful with this!!!!!
+  time_type sched_advance_until(ScheduledEventOutcome outcome); // Be careful with this!!!!!
   void sched_pop_until(time_type target_cycles);
-
-  /* For moving emulation state along */
   void step_peripherals(bool fast_cycle);
   CheatStats cheat_stats_{};
+
+  void savestate_serialize_raise(bool check_ready) const;
 
   std::optional<Debug::Debugger> debugger_{};
   std::optional<BootROM> bios_{};

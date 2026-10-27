@@ -3,6 +3,7 @@
 
 #include "emu_types.hpp"
 #include "memory/mmio/dmg.hpp"
+#include "schedule.hpp"
 #include <array>
 #include <cstddef>
 #include <vector>
@@ -12,7 +13,7 @@ class Frontend;
 
 class APU {
 public:
-  APU(AddressBus &bus, Frontend &frontend);
+  APU(AddressBus &bus, Frontend &frontend, SystemScheduler &g_sched);
   void step();
 
   // Enable the CGB-02 extra-length-clocking quirk (default: off)

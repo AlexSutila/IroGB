@@ -26,10 +26,11 @@ enum : std::uint16_t {
   F_OAM_DMA_DATA_OFFSET,
   F_OAM_DMA_ACTIVE,
   F_OAM_DMA_DMA_REG,
+  F_OAM_DMA_SCHED,
 };
 
 template <typename T> void ObjAttrDMA::parse_savestate(T &t) {
-  constexpr auto version = 2; // Schema revision
+  constexpr auto version = 3; // Schema revision
   t.chunk_header(version, Savestate::C_OAM_DMA);
 
   t.field_generic(F_OAM_DMA_SRC_BASE, src_base_addr);
@@ -38,6 +39,9 @@ template <typename T> void ObjAttrDMA::parse_savestate(T &t) {
 
   // Memory mapped registers
   t.field_complex(F_OAM_DMA_DMA_REG, [&](T &t) { dma_.parse_savestate(t); });
+  t.field_complex(F_OAM_DMA_SCHED, [&](T &t) {
+    sched.parse_savestate(t, static_cast<std::size_t>(SchedulerEvent::EVENT_COUNT));
+  });
   t.eof();
 }
 
@@ -83,6 +87,8 @@ void ObjAttrDMA::start(const byte_t addr_high) {
 
 ScheduledEventOutcome ObjAttrDMA::handle_event(time_type event_time, unsigned event) {
   constexpr auto total_bytes_to_transfer = 0xA0;
+  if (sched.is_event_dirty(event_time, event)) [[unlikely]]
+    return ScheduledEventOutcome::EVENT_OUTCOME_NONE;
 
   switch (static_cast<SchedulerEvent>(event)) {
   case SchedulerEvent::EVENT_ACQUIRE_BUS:
@@ -129,10 +135,13 @@ enum : std::uint16_t {
   // Memory mapped registers
   F_VDMA_ADDR_REGISTER,
   F_VDMA_MODE_REGISTER,
+
+  // Event scheduling
+  F_VDMA_SCHED,
 };
 
 template <typename T> void VDMA::parse_savestate(T &t) {
-  constexpr auto version = 2; // Schema revision
+  constexpr auto version = 3; // Schema revision
   t.chunk_header(version, Savestate::C_VDMA);
 
   t.field_generic(F_VDMA_BYTES_TO_TRANSFER, bytes_to_transfer);
@@ -145,6 +154,10 @@ template <typename T> void VDMA::parse_savestate(T &t) {
   t.field_complex(F_VDMA_ADDR_REGISTER, [&](T &t) { vdma3_.parse_savestate(t); });
   t.field_complex(F_VDMA_ADDR_REGISTER, [&](T &t) { vdma4_.parse_savestate(t); });
   t.field_complex(F_VDMA_MODE_REGISTER, [&](T &t) { vdma5_.parse_savestate(t); });
+
+  t.field_complex(F_VDMA_SCHED, [&](T &t) {
+    sched.parse_savestate(t, static_cast<std::size_t>(SchedulerEvent::EVENT_COUNT));
+  });
   t.eof();
 }
 
@@ -279,6 +292,9 @@ byte_t VDMA::blks_remaining() const {
 bool VDMA::hdma_active() const { return hdma_pending; }
 
 ScheduledEventOutcome VDMA::handle_event(time_type event_time, unsigned event) {
+  if (sched.is_event_dirty(event_time, event)) [[unlikely]]
+    return ScheduledEventOutcome::EVENT_OUTCOME_NONE;
+
   switch (static_cast<SchedulerEvent>(event)) {
   case SchedulerEvent::EVENT_GDMA_COPY_BYTE: {
     if (!sys_.vdma_active) [[unlikely]]
