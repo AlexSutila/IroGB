@@ -24,6 +24,7 @@
 
 // Store DMG color index in alpha bits bc we're just based like that lmao
 #define DMG_COLOR_PRESERVE_HACK(rgb, idx) ((rgb & 0x00FFFFFF) | (idx << 24))
+static constexpr std::uint32_t lcd_color_blank = 0x00FFFFFF;
 
 enum : std::uint16_t {
   F_FLUSH_ON_DISABLE = 1,
@@ -389,18 +390,16 @@ void PixelProcessingUnit::do_disabled() {
   }
 
   // TODO: Our mechanism for pushing blank frames when the PPU is off is kinda
-  // hacky. Will likely go away, planning on doing a complete PPU re-write that
-  // will use a scheduler based architecture.
+  // hacky. Basically just push blank screens repeatedly so the UI doesn't hang.
   constexpr auto fb_height = 144, fb_width = 160;
-  constexpr std::uint32_t blank = 0x00FFFFFF;
   ++cur_mode_clks;
 
   if (cur_mode_clks >= fb_height * fb_width) {
-    fe_.clear(blank); // Clear the contents of the frame out
+    fe_.clear(lcd_color_blank); // Clear the contents of the frame out
     cur_mode_clks = 0;
 
     // By writing the last pixel, we signal that the next frame is ready
-    fe_.put_pixel(fb_width - 1, fb_height - 1, blank);
+    fe_.put_pixel(fb_width - 1, fb_height - 1, lcd_color_blank);
   }
 }
 
@@ -514,10 +513,12 @@ void PixelProcessingUnit::do_draw() {
     fetcher->reset();
     obj_fifo.flush();
     bg_fifo.flush();
+
     // Simply set to minimum, raise as quirks come up during rendering. We do
     // not use this to determine end of state.
     total_mode_clks = min_drawing_cycles;
     cur_mode_clks = 0;
+
     // Counts how many pixels have been rendered on this row. The first var
     // here determines when rendering is complete.
     row_pixels_rendered = sprites_fetched = 0;
@@ -531,7 +532,14 @@ void PixelProcessingUnit::do_draw() {
   if (const auto px = get_next_pixel(row_pixels_rendered); px.has_value()) {
     const auto x = row_pixels_rendered++;
     const auto y = ly_.peek();
-    const auto c = px.value();
+
+    // If we are producing the first frame, ignore the resulting pixel and push blank.
+    // The real hardware does this as well, and games will produce strange artifacts if
+    // this fact is ignored in the form of bizzare looking flickers.
+    const auto c = first_frame_rendered ? px.value() : lcd_color_blank;
+
+    // Push LCD to frontend, pushing the last pixel indicates the frame is ready for the
+    // frontend to render it in what ever user interface the core is running behind.
     fe_.put_pixel(static_cast<int>(x), y, c);
   }
 
@@ -590,9 +598,12 @@ bool PixelProcessingUnit::blank() {
   if (cur_scanline_clks < total_mode_clks.value())
     return false;
 
-  // Request VBlank interrupt
-  if (ly_.peek() == 144)
+  // Request VBlank interrupt, the first frame has also been rendered so flip the
+  // flag to true to disable the pushing of blank frames behavior.
+  if (ly_.peek() == 144) {
+    first_frame_rendered = true;
     request_vblank_irq();
+  }
 
   // End of scanline logic
   if (ly_.is_visible())
@@ -641,6 +652,7 @@ void PixelProcessingUnit::update_stat(const PPU::StatModes new_mode) {
 }
 
 void PixelProcessingUnit::reset() {
+  first_frame_rendered = false;
   ppu_enable_oam_bug = true;
   flush_on_disable = true;
   stat_delay.clear();
