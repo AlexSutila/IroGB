@@ -115,7 +115,7 @@ public:
     t.field_generic(F_ROM_BANK, rom_bank_);
     t.field_generic(F_SEL, sel_);
     t.field_generic(F_LATCH_PREV, latch_prev_);
-    t.field_generic(F_LATCH_PREV, latch_prev_);
+    t.field_generic(F_LATCHED_VALID, latched_valid_);
 
     const auto write_rtc = [&](T &t, RtcRegs &r) {
       t.field_generic(1, r.sec);
